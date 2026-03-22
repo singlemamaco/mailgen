@@ -1,464 +1,372 @@
-# mailgen
-[![npm version](https://badge.fury.io/js/mailgen.svg)](https://www.npmjs.com/package/mailgen)
+# Cache action
 
-A Node.js package that generates clean, responsive HTML e-mails for sending transactional mail.
+This action allows caching dependencies and build outputs to improve workflow execution time.
 
-> Programmatically create beautiful e-mails using plain old JavaScript.
+>Two other actions are available in addition to the primary `cache` action:
+>
+>* [Restore action](./restore/README.md)
+>* [Save action](./save/README.md)
 
-## Demo
+[![Tests](https://github.com/actions/cache/actions/workflows/workflow.yml/badge.svg)](https://github.com/actions/cache/actions/workflows/workflow.yml)
 
-<img src="https://raw.github.com/eladnava/mailgen/master/screenshots/salted/reset.png" height="400" /> <img src="https://raw.github.com/eladnava/mailgen/master/screenshots/salted/receipt.png" height="400" />
+## Documentation
 
-> These e-mails were generated using the built-in `salted` theme.
+See ["Caching dependencies to speed up workflows"](https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows).
+
+## What's New
+
+### ⚠️ Important changes
+
+> [!IMPORTANT]
+> `actions/cache@v5` runs on the Node.js 24 runtime and requires a minimum Actions Runner version of `2.327.1`.
+> If you are using self-hosted runners, ensure they are updated before upgrading.
+
+The cache backend service has been rewritten from the ground up for improved performance and reliability. [actions/cache](https://github.com/actions/cache) now integrates with the new cache service (v2) APIs.
+
+The new service will gradually roll out as of **February 1st, 2025**. The legacy service will also be sunset on the same date. Changes in these releases are **fully backward compatible**.
+
+**We are deprecating some versions of this action**. We recommend upgrading to version `v4` or `v3` as soon as possible before **February 1st, 2025.** (Upgrade instructions below).
+
+If you are using pinned SHAs, please use the SHAs of versions `v4.2.0` or `v3.4.0`.
+
+If you do not upgrade, all workflow runs using any of the deprecated [actions/cache](https://github.com/actions/cache) will fail.
+
+Upgrading to the recommended versions will not break your workflows.
+
+> **Additionally, if you are managing your own GitHub runners, you must update your runner version to `2.231.0` or newer to ensure compatibility with the new cache service.**  
+> Failure to update both the action version and your runner version may result in workflow failures after the migration date.
+
+Read more about the change & access the migration guide: [reference to the announcement](https://github.com/actions/cache/discussions/1510).
+
+### v5
+
+* Updated to node 24
+* Requires a minimum Actions Runner version of `2.327.1`
+
+### v4
+
+* Integrated with the new cache service (v2) APIs.
+* Updated to node 20
+
+### v3
+
+* Integrated with the new cache service (v2) APIs.
+* Added support for caching in GHES 3.5+.
+* Fixed download issue for files > 2GB during restore.
+* Updated the minimum runner version support from node 12 -> node 16.
+* Fixed avoiding empty cache save when no files are available for caching.
+* Fixed tar creation error while trying to create tar with path as `~/` home folder on `ubuntu-latest`.
+* Fixed zstd failing on amazon linux 2.0 runners.
+* Fixed cache not working with github workspace directory or current directory.
+* Fixed the download stuck problem by introducing a timeout of 1 hour for cache downloads.
+* Fix zstd not working for windows on gnu tar in issues.
+* Allowing users to provide a custom timeout as input for aborting download of a cache segment using an environment variable `SEGMENT_DOWNLOAD_TIMEOUT_MINS`. Default is 10 minutes.
+* New actions are available for granular control over caches - [restore](restore/action.yml) and [save](save/action.yml).
+* Support cross-os caching as an opt-in feature. See [Cross OS caching](./tips-and-workarounds.md#cross-os-cache) for more info.
+* Added option to fail job on cache miss. See [Exit workflow on cache miss](./restore/README.md#exit-workflow-on-cache-miss) for more info.
+* Fix zstd not being used after zstd version upgrade to 1.5.4 on hosted runners
+* Added option to lookup cache without downloading it.
+* Reduced segment size to 128MB and segment timeout to 10 minutes to fail fast in case the cache download is stuck.
+
+See the [v2 README.md](https://github.com/actions/cache/blob/v2/README.md) for older updates.
 
 ## Usage
 
-First, install the package using npm:
+### Pre-requisites
 
-```shell
-npm install mailgen --save
+Create a workflow `.yml` file in your repository's `.github/workflows` directory. An [example workflow](#example-cache-workflow) is available below. For more information, see the GitHub Help Documentation for [Creating a workflow file](https://help.github.com/en/articles/configuring-a-workflow#creating-a-workflow-file).
+
+If you are using this inside a container, a POSIX-compliant `tar` needs to be included and accessible from the execution path.
+
+Note: `actions/cache@v5` runs on Node.js 24 and requires a minimum Actions Runner version of `2.327.1`.
+
+If you are using a `self-hosted` Windows runner, `GNU tar` and `zstd` are required for [Cross-OS caching](https://github.com/actions/cache/blob/main/tips-and-workarounds.md#cross-os-cache) to work. They are also recommended to be installed in general so the performance is on par with `hosted` Windows runners.
+
+### Inputs
+
+* `key` - An explicit key for a cache entry. See [creating a cache key](#creating-a-cache-key).
+* `path` - A list of files, directories, and wildcard patterns to cache and restore. See [`@actions/glob`](https://github.com/actions/toolkit/tree/main/packages/glob) for supported patterns.
+* `restore-keys` - An ordered multiline string listing the prefix-matched keys, that are used for restoring stale cache if no cache hit occurred for key.
+* `enableCrossOsArchive` - An optional boolean when enabled, allows Windows runners to save or restore caches that can be restored or saved respectively on other platforms. Default: `false`
+* `fail-on-cache-miss` - Fail the workflow if cache entry is not found. Default: `false`
+* `lookup-only` - If true, only checks if cache entry exists and skips download. Does not change save cache behavior. Default: `false`
+
+#### Environment Variables
+
+* `SEGMENT_DOWNLOAD_TIMEOUT_MINS` - Segment download timeout (in minutes, default `10`) to abort download of the segment if not completed in the defined number of minutes. [Read more](https://github.com/actions/cache/blob/main/tips-and-workarounds.md#cache-segment-restore-timeout)
+
+### Outputs
+
+* `cache-hit` - A string value to indicate an exact match was found for the key.
+  * If there's a cache hit, this will be 'true' or 'false' to indicate if there's an exact match for `key`.
+  * If there's a cache miss, this will be an empty string.
+
+See [Skipping steps based on cache-hit](#skipping-steps-based-on-cache-hit) for info on using this output
+
+### Cache scopes
+
+The cache is scoped to the key, [version](#cache-version), and branch. The default branch cache is available to other branches.
+
+See [Matching a cache key](https://help.github.com/en/actions/configuring-and-managing-workflows/caching-dependencies-to-speed-up-workflows#matching-a-cache-key) for more info.
+
+### Example cache workflow
+
+#### Restoring and saving cache using a single action
+
+```yaml
+name: Caching Primes
+
+on: push
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Cache Primes
+      id: cache-primes
+      uses: actions/cache@v5
+      with:
+        path: prime-numbers
+        key: ${{ runner.os }}-primes
+
+    - name: Generate Prime Numbers
+      if: steps.cache-primes.outputs.cache-hit != 'true'
+      run: /generate-primes.sh -d prime-numbers
+
+    - name: Use Prime Numbers
+      run: /primes.sh -d prime-numbers
 ```
 
-Then, start using the package by importing and configuring it:
+The `cache` action provides a `cache-hit` output which is set to `true` when the cache is restored using the primary `key` and `false` when the cache is restored using `restore-keys` or no cache is restored.
 
-```js
-var Mailgen = require('mailgen');
+#### Using a combination of restore and save actions
 
-// Configure mailgen by setting a theme and your product info
-var mailGenerator = new Mailgen({
-    theme: 'default',
-    product: {
-        // Appears in header & footer of e-mails
-        name: 'Mailgen',
-        link: 'https://mailgen.js/'
-        // Optional product logo
-        // logo: 'https://mailgen.js/img/logo.png'
-    }
-});
+```yaml
+name: Caching Primes
+
+on: push
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Restore cached Primes
+      id: cache-primes-restore
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          path/to/dependencies
+          some/other/dependencies
+        key: ${{ runner.os }}-primes
+    .
+    . //intermediate workflow steps
+    .
+    - name: Save Primes
+      id: cache-primes-save
+      uses: actions/cache/save@v5
+      with:
+        path: |
+          path/to/dependencies
+          some/other/dependencies
+        key: ${{ steps.cache-primes-restore.outputs.cache-primary-key }}
 ```
 
-Next, generate an e-mail using the following code:
+> **Note**
+> You must use the `cache` or `restore` action in your workflow before you need to use the files that might be restored from the cache. If the provided `key` matches an existing cache, a new cache is not created and if the provided `key` doesn't match an existing cache, a new cache is automatically created provided the job completes successfully.
 
-```js
-var email = {
-    body: {
-        name: 'John Appleseed',
-        intro: 'Welcome to Mailgen! We\'re very excited to have you on board.',
-        action: {
-            instructions: 'To get started with Mailgen, please click here:',
-            button: {
-                color: '#22BC66', // Optional action button color
-                text: 'Confirm your account',
-                link: 'https://mailgen.js/confirm?s=d9729feb74992cc3482b350163a1a010'
-            }
-        },
-        outro: 'Need help, or have questions? Just reply to this email, we\'d love to help.'
-    }
-};
+## Caching Strategies
 
-// Generate an HTML email with the provided contents
-var emailBody = mailGenerator.generate(email);
+With the introduction of the `restore` and `save` actions, a lot of caching use cases can now be achieved. Please see the [caching strategies](./caching-strategies.md) document for understanding how you can use the actions strategically to achieve the desired goal.
 
-// Generate the plaintext version of the e-mail (for clients that do not support HTML)
-var emailText = mailGenerator.generatePlaintext(email);
+## Implementation Examples
 
-// Optionally, preview the generated HTML e-mail by writing it to a local file
-require('fs').writeFileSync('preview.html', emailBody, 'utf8');
+Every programming language and framework has its own way of caching.
 
-// `emailBody` now contains the HTML body,
-// and `emailText` contains the textual version.
-//
-// It's up to you to send the e-mail.
-// Check out nodemailer to accomplish this:
-// https://nodemailer.com/
+See [Examples](examples.md) for a list of `actions/cache` implementations for use with:
+
+* [Bun](./examples.md#bun)
+* [C# - NuGet](./examples.md#c---nuget)
+* [Clojure - Lein Deps](./examples.md#clojure---lein-deps)
+* [D - DUB](./examples.md#d---dub)
+* [Deno](./examples.md#deno)
+* [Elixir - Mix](./examples.md#elixir---mix)
+* [Go - Modules](./examples.md#go---modules)
+* [Haskell - Cabal](./examples.md#haskell---cabal)
+* [Haskell - Stack](./examples.md#haskell---stack)
+* [Java - Gradle](./examples.md#java---gradle)
+* [Java - Maven](./examples.md#java---maven)
+* [Node - npm](./examples.md#node---npm)
+* [Node - Lerna](./examples.md#node---lerna)
+* [Node - Yarn](./examples.md#node---yarn)
+* [OCaml/Reason - esy](./examples.md#ocamlreason---esy)
+* [PHP - Composer](./examples.md#php---composer)
+* [Python - pip](./examples.md#python---pip)
+* [Python - pipenv](./examples.md#python---pipenv)
+* [R - renv](./examples.md#r---renv)
+* [Ruby - Bundler](./examples.md#ruby---bundler)
+* [Rust - Cargo](./examples.md#rust---cargo)
+* [Scala - SBT](./examples.md#scala---sbt)
+* [Swift, Objective-C - Carthage](./examples.md#swift-objective-c---carthage)
+* [Swift, Objective-C - CocoaPods](./examples.md#swift-objective-c---cocoapods)
+* [Swift - Swift Package Manager](./examples.md#swift---swift-package-manager)
+* [Swift - Mint](./examples.md#swift---mint)
+
+## Creating a cache key
+
+A cache key can include any of the contexts, functions, literals, and operators supported by GitHub Actions.
+
+For example, using the [`hashFiles`](https://docs.github.com/en/actions/learn-github-actions/expressions#hashfiles) function allows you to create a new cache when dependencies change.
+
+```yaml
+  - uses: actions/cache@v5
+    with:
+      path: |
+        path/to/dependencies
+        some/other/dependencies
+      key: ${{ runner.os }}-${{ hashFiles('**/lockfiles') }}
 ```
 
-This code would output the following HTML template:
+Additionally, you can use arbitrary command output in a cache key, such as a date or software version:
 
-<img src="https://raw.github.com/eladnava/mailgen/master/screenshots/default/welcome.png" height="400" />
+```yaml
+  # http://man7.org/linux/man-pages/man1/date.1.html
+  - name: Get Date
+    id: get-date
+    run: |
+      echo "date=$(/bin/date -u "+%Y%m%d")" >> $GITHUB_OUTPUT
+    shell: bash
 
-## More Examples
-
-* [Receipt](examples/receipt.js)
-* [Password Reset](examples/reset.js)
-
-## Plaintext E-mails
-
-To generate a [plaintext version of the e-mail](https://litmus.com/blog/best-practices-for-plain-text-emails-a-look-at-why-theyre-important), simply call `generatePlaintext()`:
-
-```js
-// Generate plaintext email using mailgen
-var emailText = mailGenerator.generatePlaintext(email);
+  - uses: actions/cache@v5
+    with:
+      path: path/to/dependencies
+      key: ${{ runner.os }}-${{ steps.get-date.outputs.date }}-${{ hashFiles('**/lockfiles') }}
 ```
 
-## Supported Themes
+See [Using contexts to create cache keys](https://help.github.com/en/actions/configuring-and-managing-workflows/caching-dependencies-to-speed-up-workflows#using-contexts-to-create-cache-keys)
 
-The following open-source themes are bundled with this package:
+## Cache Limits
 
-* `default` by [Postmark Transactional Email Templates](https://github.com/wildbit/postmark-templates)
+A repository can have up to 10GB of caches. Once the 10GB limit is reached, older caches will be evicted based on when the cache was last accessed.  Caches that are not accessed within the last week will also be evicted.
 
-<img src="https://raw.github.com/eladnava/mailgen/master/screenshots/default/welcome.png" height="200" /> <img src="https://raw.github.com/eladnava/mailgen/master/screenshots/default/reset.png" height="200" /> <img src="https://raw.github.com/eladnava/mailgen/master/screenshots/default/receipt.png" height="200" />
+## Skipping steps based on cache-hit
 
-* `neopolitan` by [Send With Us](https://github.com/sendwithus/templates/tree/master/templates/neopolitan)
+Using the `cache-hit` output, subsequent steps (such as install or build) can be skipped when a cache hit occurs on the key.  It is recommended to install missing/updated dependencies in case of a partial key match when the key is dependent on the `hash` of the package file.
 
-<img src="https://raw.github.com/eladnava/mailgen/master/screenshots/neopolitan/welcome.png" height="200" /> <img src="https://raw.github.com/eladnava/mailgen/master/screenshots/neopolitan/reset.png" height="200" /> <img src="https://raw.github.com/eladnava/mailgen/master/screenshots/neopolitan/receipt.png" height="200" />
+Example:
 
-* `salted` by [Jason Rodriguez](https://github.com/rodriguezcommaj/salted)
+```yaml
+steps:
+  - uses: actions/checkout@v6
 
-<img src="https://raw.github.com/eladnava/mailgen/master/screenshots/salted/welcome.png" height="200" /> <img src="https://raw.github.com/eladnava/mailgen/master/screenshots/salted/reset.png" height="200" /> <img src="https://raw.github.com/eladnava/mailgen/master/screenshots/salted/receipt.png" height="200" />
+  - uses: actions/cache@v5
+    id: cache
+    with:
+      path: path/to/dependencies
+      key: ${{ runner.os }}-${{ hashFiles('**/lockfiles') }}
 
-* `cerberus` by [Ted Goas](http://tedgoas.github.io/Cerberus/)
-
-<img src="https://raw.github.com/eladnava/mailgen/master/screenshots/cerberus/welcome.png" height="200" /> <img src="https://raw.github.com/eladnava/mailgen/master/screenshots/cerberus/reset.png" height="200" /> <img src="https://raw.github.com/eladnava/mailgen/master/screenshots/cerberus/receipt.png" height="200" />
-
-We thank the contributing authors for creating these themes.
-
-## Custom Themes
-
-If you want to supply your own custom theme or add a new built-in theme, check out [THEME.md](THEME.md) for instructions.
-
-## RTL Support
-
-To change the default text direction (left-to-right), simply override it as follows:
-
-```js
-var mailGenerator = new Mailgen({
-    theme: 'salted',
-    // Custom text direction
-    textDirection: 'rtl',
-});
+  - name: Install Dependencies
+    if: steps.cache.outputs.cache-hit != 'true'
+    run: /install.sh
 ```
 
-## Custom Logo Height
+> **Note** The `id` defined in `actions/cache` must match the `id` in the `if` statement (i.e. `steps.[ID].outputs.cache-hit`)
 
-To change the default product logo height, set it as follows:
+## Cache Version
 
-```js
-var mailGenerator = new Mailgen({
-    product: {
-        // Custom product logo URL
-        logo: 'https://mailgen.js/img/logo.png',
-        // Custom logo height
-        logoHeight: '30px'
-    }
-});
+Cache version is a hash [generated](https://github.com/actions/toolkit/blob/500d0b42fee2552ae9eeb5933091fe2fbf14e72d/packages/cache/src/internal/cacheHttpClient.ts#L73-L90) for a combination of compression tool used (Gzip, Zstd, etc. based on the runner OS) and the `path` of directories being cached. If two caches have different versions, they are identified as unique caches while matching. This, for example, means that a cache created on a `windows-latest` runner can't be restored on `ubuntu-latest` as cache `Version`s are different.
+
+> Pro tip: The [list caches](https://docs.github.com/en/rest/actions/cache#list-github-actions-caches-for-a-repository) API can be used to get the version of a cache. This can be helpful to troubleshoot cache miss due to version.
+
+<details>
+  <summary>Example</summary>
+The workflow will create 3 unique caches with same keys. Ubuntu and windows runners will use different compression technique and hence create two different caches. And `build-linux` will create two different caches as the `paths` are different.
+
+```yaml
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache Primes
+        id: cache-primes
+        uses: actions/cache@v5
+        with:
+          path: prime-numbers
+          key: primes
+
+      - name: Generate Prime Numbers
+        if: steps.cache-primes.outputs.cache-hit != 'true'
+        run: ./generate-primes.sh -d prime-numbers
+
+      - name: Cache Numbers
+        id: cache-numbers
+        uses: actions/cache@v5
+        with:
+          path: numbers
+          key: primes
+
+      - name: Generate Numbers
+        if: steps.cache-numbers.outputs.cache-hit != 'true'
+        run: ./generate-primes.sh -d numbers
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache Primes
+        id: cache-primes
+        uses: actions/cache@v5
+        with:
+          path: prime-numbers
+          key: primes
+
+      - name: Generate Prime Numbers
+        if: steps.cache-primes.outputs.cache-hit != 'true'
+        run: ./generate-primes -d prime-numbers
 ```
 
-## Language Customizations
+</details>
 
-To customize the e-mail greeting (Hi) or signature (Yours truly), supply custom strings within the e-mail `body`:
+## Known practices and workarounds
 
-```js
-var email = {
-    body: {
-        greeting: 'Dear',
-        signature: 'Sincerely'
-    }
-};
-```
+There are a number of community practices/workarounds to fulfill specific requirements. You may choose to use them if they suit your use case. Note these are not necessarily the only solution or even a recommended solution.
 
-To not include the signature or greeting at all, set the signature or greeting fields to `false`:
+* [Cache segment restore timeout](./tips-and-workarounds.md#cache-segment-restore-timeout)
+* [Update a cache](./tips-and-workarounds.md#update-a-cache)
+* [Use cache across feature branches](./tips-and-workarounds.md#use-cache-across-feature-branches)
+* [Cross OS cache](./tips-and-workarounds.md#cross-os-cache)
+* [Force deletion of caches overriding default cache eviction policy](./tips-and-workarounds.md#force-deletion-of-caches-overriding-default-cache-eviction-policy)
 
-```js
-var email = {
-    body: {
-      signature: false,
-      greeting: false // This will override and disable name & title options
-    }
-};
-```
+### Windows environment variables
 
-To use a custom title string rather than a greeting/name introduction, provide it instead of `name`:
+Please note that Windows environment variables (like `%LocalAppData%`) will NOT be expanded by this action. Instead, prefer using `~` in your paths which will expand to the HOME directory. For example, instead of `%LocalAppData%`, use `~\AppData\Local`. For a list of supported default environment variables, see the [Learn GitHub Actions: Variables](https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables) page.
 
-```js
-var email = {
-    body: {
-        // Title will override `name`
-        title: 'Welcome to Mailgen!'
-    }
-};
-```
+## Note
 
-To customize the `copyright`, override it when initializing `Mailgen` within your `product` as follows:
+Thank you for your interest in this GitHub repo, however, right now we are not taking contributions. 
 
-```js
-// Configure mailgen
-var mailGenerator = new Mailgen({
-    theme: 'salted',
-    product: {
-        name: 'Mailgen',
-        link: 'https://mailgen.js/',
-        // Custom copyright notice
-        copyright: `Copyright © ${new Date().getFullYear()} Mailgen. All rights reserved.`,
-    }
-});
-```
+We continue to focus our resources on strategic areas that help our customers be successful while making developers' lives easier. While GitHub Actions remains a key part of this vision, we are allocating resources towards other areas of Actions and are not taking contributions to this repository at this time. The GitHub public roadmap is the best place to follow along for any updates on features we’re working on and what stage they’re in.
 
-## Multiline Support
+We are taking the following steps to better direct requests related to GitHub Actions, including:
 
-To inject multiple lines of text for the `intro` or `outro`, simply supply an array of strings:
+1. We will be directing questions and support requests to our [Community Discussions area](https://github.com/orgs/community/discussions/categories/actions)
 
-```js
-var email = {
-    body: {
-        intro: ['Welcome to Mailgen!', 'We\'re very excited to have you on board.'],
-        outro: ['Need help, or have questions?', 'Just reply to this email, we\'d love to help.'],
-    }
-};
-```
+2. High Priority bugs can be reported through Community Discussions or you can report these to our support team https://support.github.com/contact/bug-report.
 
-## Elements
+3. Security Issues should be handled as per our [security.md](SECURITY.md).
 
-Mailgen supports injecting custom elements such as dictionaries, tables and action buttons into e-mails.
+We will still provide security updates for this project and fix major breaking changes during this time.
 
-### Action
-
-To inject an action button in to the e-mail, supply the `action` object as follows:
-
-```js
-var email = {
-    body: {
-        action: {
-            instructions: 'To get started with Mailgen, please click here:',
-            button: {
-                color: '#48cfad', // Optional action button color
-                text: 'Confirm your account',
-                link: 'https://mailgen.js/confirm?s=d9729feb74992cc3482b350163a1a010'
-            }
-        }
-    }
-};
-```
-
-To inject multiple action buttons in to the e-mail, supply the `action` object as follows:
-
-```js
-var email = {
-    body: {
-        action: [
-            {
-                instructions: 'To get started with Mailgen, please click here:',
-                button: {
-                    color: '#22BC66',
-                    text: 'Confirm your account',
-                    link: 'https://mailgen.js/confirm?s=d9729feb74992cc3482b350163a1a010'
-                }
-            },
-            {
-                instructions: 'To read our frequently asked questions, please click here:',
-                button: {
-                    text: 'Read our FAQ',
-                    link: 'https://mailgen.js/faq'
-                }
-            }
-        ]
-    }
-};
-```
-
-You can enable a fallback link and instructions for action buttons in case e-mail clients don't render them properly. This can be achieved by setting `button.fallback` to `true`, or  by specifying custom fallback text as follows:
-```js
-var email = {
-    body: {
-        action: [
-            {
-                instructions: 'To get started with Mailgen, please click here:',
-                button: {
-                    color: '#22BC66',
-                    text: 'Confirm your account',
-                    link: 'https://mailgen.js/confirm?s=d9729feb74992cc3482b350163a1a010',
-                    fallback: true
-                }
-            },
-            {
-                instructions: 'To read our frequently asked questions, please click here:',
-                button: {
-                    text: 'Read our FAQ',
-                    link: 'https://mailgen.js/faq',
-                    fallback: {
-                        text: 'This is my custom text for fallback'
-                    }
-                }
-            }
-        ]
-    }
-};
-```
-
-### Table
-
-To inject a table into the e-mail, supply the `table` object as follows:
-
-```js
-var email = {
-    body: {
-        table: {
-            data: [
-                {
-                    item: 'Node.js',
-                    description: 'Event-driven I/O server-side JavaScript environment based on V8.',
-                    price: '$10.99'
-                },
-                {
-                    item: 'Mailgen',
-                    description: 'Programmatically create beautiful e-mails using plain old JavaScript.',
-                    price: '$1.99'
-                }
-            ],
-            columns: {
-                // Optionally, customize the column widths
-                customWidth: {
-                    item: '20%',
-                    price: '15%'
-                },
-                // Optionally, change column text alignment
-                customAlignment: {
-                    price: 'right'
-                }
-            }
-        }
-    }
-};
-```
-
-To inject multiple tables into the e-mail, supply the `table` property with an array of objects as follows:
-
-```js
-var email = {
-    body: {
-        table: [
-            {
-                // Optionally, add a title to each table.
-                title: 'Order 1',
-                data: [
-                    {
-                        item: 'Item 1',
-                        description: 'Item 1 description',
-                        price: '$1.99'
-                    },
-                    {
-                        item: 'Item 2',
-                        description: 'Item 2 description',
-                        price: '$2.99'
-                    }
-                ],
-                columns: {
-                    // Optionally, customize the column widths
-                    customWidth: {
-                        item: '20%',
-                        price: '15%'
-                    },
-                    // Optionally, change column text alignment
-                    customAlignment: {
-                        price: 'right'
-                    }
-                }
-            },
-            {
-                // Optionally, add a title to each table.
-                title: 'Order 2',
-                data: [
-                    {
-                        item: 'Item 1',
-                        description: 'Item 1 description',
-                        price: '$2.99'
-                    },
-                    {
-                        item: 'Item 2',
-                        description: 'Item 2 description',
-                        price: '$1.99'
-                    }
-                ],
-                columns: {
-                    // Optionally, customize the column widths
-                    customWidth: {
-                        item: '20%',
-                        price: '15%'
-                    },
-                    // Optionally, change column text alignment
-                    customAlignment: {
-                        price: 'right'
-                    }
-                }
-            }
-        ]
-    }
-};
-```
-
-> Note: Tables are currently not supported in plaintext versions of e-mails.
-
-### Dictionary
-
- To inject key-value pairs of data into the e-mail, supply the `dictionary` object as follows:
-
- ```js
-var email = {
-    body: {
-        dictionary: {
-            date: 'June 11th, 2016',
-            address: '123 Park Avenue, Miami, Florida'
-        }
-    }
-};
-```
-
-## Go-To Actions
-
-You can make use of Gmail's [Go-To Actions](https://developers.google.com/gmail/markup/reference/go-to-action) within your e-mails by suppling the `goToAction` object as follows:
-
-```js
-var email = {
-    body: {
-        // Optionally configure a Go-To Action button
-        goToAction: {
-            text: 'Go to Dashboard',
-            link: 'https://mailgen.com/confirm?s=d9729feb74992cc3482b350163a1a010',
-            description: 'Check the status of your order in your dashboard'
-        }
-    }
-};
-```
-
-> Note that you need to [get your sender address whitelisted](https://developers.google.com/gmail/markup/registering-with-google) before your Go-To Actions will show up in Gmail.
-
-## Troubleshooting
-
-1. After sending multiple e-mails to the same Gmail / Inbox address, they become grouped and truncated since they contain similar text, breaking the responsive e-mail layout.
-
-> Simply sending the `X-Entity-Ref-ID` header with your e-mails will prevent grouping / truncation.
-
-2. **Next.js** Error: `You have specified an invalid theme.`
-
-> Within Next.js, please specify a verbose path to the `theme` files, as follows:
-
-```
-var mailGenerator = new Mailgen({
-    theme: {
-       path: process.cwd() + '/node_modules/mailgen/themes/default/index.html',
-       plaintextPath: process.cwd() + '/node_modules/mailgen/themes/default/index.txt'
-    }
-});
-```
-
-> Feel free to replace `default` in the above two strings with another theme of choice.
-
-## Contributing
-
-Thanks so much for wanting to help! We really appreciate it.
-
-* Have an idea for a new feature?
-* Want to add a new built-in theme?
-
-Excellent! You've come to the right place.
-
-1. If you find a bug or wish to suggest a new feature, please create an issue first
-2. Make sure your code & comment conventions are in-line with the project's style
-3. Make your commits and PRs as tiny as possible - one feature or bugfix at a time
-4. Write detailed commit messages, in-line with the project's commit naming conventions
-
-> Check out [THEME.md](THEME.md) if you want to add a new built-in theme to Mailgen.
+You are welcome to still raise bugs in this repo.
 
 ## License
 
-Apache 2.0
+The scripts and documentation in this project are released under the [MIT License](LICENSE)
